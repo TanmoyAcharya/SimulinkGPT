@@ -3,12 +3,9 @@
 # Model Configuration
 model:
   # Base model to use (HuggingFace path or local file)
-  name: "meta-llama/Llama-3.2-1B-Instruct"
-  # Path to local GGUF model file
-  model_path: "./models/Llama-3.2-1B-Instruct.Q4_K_M.gguf"
-  
-  # Quantization settings (for GGUF inference)
-  quantization: "q4_K_M"  # Options: q4_0, q4_1, q4_K_M, q5_0, q5_1, q8_0
+  name: "microsoft/Phi-3-mini-4k-instruct"
+  # Use transformers backend (works better on Windows)
+  backend: "transformers"
   max_tokens: 2048
   temperature: 0.7
   top_p: 0.9

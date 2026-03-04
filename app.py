@@ -57,7 +57,7 @@ def main():
         # Model backend selection
         backend = st.selectbox(
             "LLM Backend",
-            ["llama.cpp", "transformers", "openai"],
+            ["transformers", "llama.cpp", "openai"],
             index=0,
             help="Choose the inference backend"
         )
@@ -72,7 +72,8 @@ def main():
         else:
             model_path = st.text_input(
                 "Model Name",
-                value="meta-llama/Llama-3.2-1B-Instruct"
+                value="microsoft/Phi-3-mini-4k-instruct",
+                help="HuggingFace model name"
             )
         
         # Initialize button
