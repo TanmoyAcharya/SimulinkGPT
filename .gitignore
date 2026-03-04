@@ -34,11 +34,10 @@ ENV/
 *.swo
 *~
 
-# Models
-models/*.gguf
+# Models (except .gguf files tracked with LFS)
 models/*.bin
 models/*.safetensors
-!models/.gitkeep
+models/.cache/
 
 # Knowledge Base Cache
 knowledge_base/vector_store/
