@@ -4,6 +4,8 @@
 model:
   # Base model to use (HuggingFace path or local file)
   name: "meta-llama/Llama-3.2-1B-Instruct"
+  # Path to local GGUF model file
+  model_path: "./models/Llama-3.2-1B-Instruct.Q4_K_M.gguf"
   
   # Quantization settings (for GGUF inference)
   quantization: "q4_K_M"  # Options: q4_0, q4_1, q4_K_M, q5_0, q5_1, q8_0
