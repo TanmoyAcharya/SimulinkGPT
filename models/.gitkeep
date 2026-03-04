@@ -1,0 +1,10 @@
+# Models Directory
+
+Place your GGUF model files here.
+
+Recommended models:
+- Qwen2.5-0.5B-Instruct-Q4_K_M.gguf (~400MB)
+- Llama-3.2-1B-Instruct-Q4_K_M.gguf (~700MB)
+- Phi-3.5-mini-instruct-q4.gguf (~2GB)
+
+Download from: https://huggingface.co/models?search=gguf
