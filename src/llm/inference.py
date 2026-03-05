@@ -141,38 +141,18 @@ class LLMInference:
                 trust_remote_code=True
             )
             
-            # Determine device
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            # Determine device - use CPU for stability
+            device = "cpu"
             
-            # Load model (with optional quantization)
-            if self.quantization and "q4" in self.quantization.lower():
-                # Use BitsAndBytes for quantization
-                try:
-                    from transformers import BitsAndBytesConfig
-                    quantization_config = BitsAndBytesConfig(
-                        load_in_4bit=True
-                    )
-                    self.model = AutoModelForCausalLM.from_pretrained(
-                        self.model_name,
-                        quantization_config=quantization_config,
-                        device_map="auto",
-                        trust_remote_code=True
-                    )
-                except:
-                    # Fallback to regular loading
-                    self.model = AutoModelForCausalLM.from_pretrained(
-                        self.model_name,
-                        device_map="auto",
-                        torch_dtype=torch.float16,
-                        trust_remote_code=True
-                    )
-            else:
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    self.model_name,
-                    device_map="auto",
-                    torch_dtype=torch.float16,
-                    trust_remote_code=True
-                )
+            # Load model - use newer API without device_map for CPU-only
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                torch_dtype=torch.float16,
+                trust_remote_code=True,
+                low_cpu_mem_usage=True
+            )
+            
+            self.model.to(device)
             
             self._initialized = True
             logger.info(f"Initialized transformers model on {device}")
@@ -180,6 +160,8 @@ class LLMInference:
             
         except Exception as e:
             logger.error(f"Error initializing transformers: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def _init_openai(self) -> bool:
@@ -250,6 +232,8 @@ class LLMInference:
                 return "Error: Unknown backend"
         except Exception as e:
             logger.error(f"Generation error: {e}")
+            import traceback
+            traceback.print_exc()
             return f"Error during generation: {str(e)}"
     
     def _generate_llama(
@@ -284,7 +268,11 @@ class LLMInference:
         """Generate using transformers."""
         import torch
         
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        # Prepare input
+        inputs = self.tokenizer(prompt, return_tensors="pt")
+        
+        # Move to CPU since we loaded on CPU
+        inputs = {k: v for k, v in inputs.items()}
         
         with torch.no_grad():
             outputs = self.model.generate(
