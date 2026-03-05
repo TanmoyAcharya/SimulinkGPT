@@ -195,6 +195,8 @@ class SimulinkParser:
         """
         Parse .slx file as ZIP and extract XML structure.
         This method works without MATLAB installation.
+        
+        Improved version with better XML namespace handling and extraction.
         """
         logger.info(f"Parsing {slx_file} using XML extraction")
         
@@ -211,14 +213,17 @@ class SimulinkParser:
                 
                 # Find the main model XML - different Simulink versions use different paths
                 model_xml = None
+                found_xml_path = None
                 xml_paths = [
                     'simulink/simulink.xml',
                     'simulink.xml',
+                    'Simulink.xml',
                 ]
                 
                 for xml_path in xml_paths:
                     if xml_path in file_list:
                         model_xml = zf.read(xml_path)
+                        found_xml_path = xml_path
                         logger.info(f"Found model XML at: {xml_path}")
                         break
                 
@@ -227,67 +232,109 @@ class SimulinkParser:
                     for name in file_list:
                         if name.endswith('.xml') and 'simulink' in name.lower():
                             model_xml = zf.read(name)
+                            found_xml_path = name
                             logger.info(f"Found model XML at: {name}")
                             break
+                
+                # Also try to extract from block XML files
+                block_xml_files = [f for f in file_list if 'simulink' in f.lower() and f.endswith('.xml')]
                 
                 if model_xml:
                     root = ET.fromstring(model_xml)
                     
                     # Try different XML namespaces used by Simulink
-                    namespaces = {
-                        'ns': 'http://www.mathworks.com/Schema/matlab/2016b/xml/matlab',  # Older
-                        '': '',  # No namespace
-                    }
+                    namespaces = [
+                        {'': ''},  # No namespace
+                        {'ns': 'http://www.mathworks.com/Schema/matlab/2016b/xml/matlab'},
+                        {'ns': 'http://www.mathworks.com/Schema/matlab/2017a/xml/matlab'},
+                        {'ns': 'http://www.mathworks.com/Schema/matlab/2019a/xml/matlab'},
+                        {'ns': 'http://www.w3.org/2001/XMLSchema-instance'},
+                    ]
                     
-                    # Extract blocks - try different paths
-                    for ns_prefix in ['', 'ns', None]:
+                    # Extract blocks - try multiple approaches
+                    for ns in namespaces:
                         try:
-                            if ns_prefix:
-                                blocks_elem = root.findall(f".//{{{ns_prefix}}}Block")
-                            else:
-                                blocks_elem = root.findall(".//Block")
+                            blocks_elem = root.findall('.//Block', ns)
+                            if not blocks_elem:
+                                blocks_elem = root.findall('.//ns:Block', ns)
                             
                             if blocks_elem:
-                                logger.info(f"Found {len(blocks_elem)} blocks")
+                                logger.info(f"Found {len(blocks_elem)} blocks with ns: {ns}")
                                 for block_elem in blocks_elem:
-                                    block = self._parse_block_element(block_elem)
+                                    block = self._parse_block_element(block_elem, ns)
                                     if block:
                                         blocks.append(block)
                                         if block.block_type == "SubSystem":
                                             subsystems.append(block.path)
-                                break
+                                if blocks:
+                                    break
                         except Exception as e:
-                            logger.debug(f"Block extraction with ns '{ns_prefix}' failed: {e}")
+                            logger.debug(f"Block extraction with ns {ns} failed: {e}")
                     
-                    # Extract lines (signals)
-                    for ns_prefix in ['', 'ns', None]:
-                        try:
-                            if ns_prefix:
-                                lines_elem = root.findall(f".//{{{ns_prefix}}}Line")
-                            else:
-                                lines_elem = root.findall(".//Line")
-                            
-                            if lines_elem:
-                                logger.info(f"Found {len(lines_elem)} lines")
-                                for line_elem in lines_elem:
-                                    signal = self._parse_line_element(line_elem)
-                                    if signal:
-                                        signals.append(signal)
-                                break
-                        except Exception as e:
-                            logger.debug(f"Line extraction with ns '{ns_prefix}' failed: {e}")
-                    
-                    # Also try to find elements without namespace
+                    # If still no blocks, try without namespace
                     if not blocks:
+                        logger.info("Trying fallback block extraction")
                         for elem in root.iter():
-                            if elem.tag.endswith('Block') or 'Block' in elem.tag:
-                                block = self._parse_block_element(elem)
+                            tag = elem.tag if isinstance(elem.tag, str) else ''
+                            if 'Block' in tag:
+                                block = self._parse_block_element(elem, {})
                                 if block:
                                     blocks.append(block)
+                                    if block.block_type == "SubSystem":
+                                        subsystems.append(block.path)
                     
+                    # Extract lines (signals) - try multiple approaches
+                    for ns in namespaces:
+                        try:
+                            lines_elem = root.findall('.//Line', ns)
+                            if not lines_elem:
+                                lines_elem = root.findall('.//ns:Line', ns)
+                            
+                            if lines_elem:
+                                logger.info(f"Found {len(lines_elem)} lines with ns: {ns}")
+                                for line_elem in lines_elem:
+                                    signal = self._parse_line_element(line_elem, ns)
+                                    if signal:
+                                        signals.append(signal)
+                                if signals:
+                                    break
+                        except Exception as e:
+                            logger.debug(f"Line extraction with ns {ns} failed: {e}")
+                    
+                    # If still no signals, try fallback
+                    if not signals:
+                        for elem in root.iter():
+                            tag = elem.tag if isinstance(elem.tag, str) else ''
+                            if 'Line' in tag:
+                                signal = self._parse_line_element(elem, {})
+                                if signal:
+                                    signals.append(signal)
+                    
+                    # Extract model parameters
+                    try:
+                        config_elem = root.find('.//Configuration')
+                        if config_elem is not None:
+                            for param in config_elem:
+                                param_name = param.get('Name', param.tag)
+                                value_elem = param.find('Value')
+                                if value_elem is not None and value_elem.text:
+                                    parameters[param_name] = value_elem.text
+                    except Exception as e:
+                        logger.debug(f"Could not extract configuration: {e}")
+                    
+                    # Also look for annotations (descriptions)
+                    annotations = []
+                    for elem in root.iter():
+                        tag = elem.tag if isinstance(elem.tag, str) else ''
+                        if 'Annotation' in tag:
+                            ann_text = elem.get('Name', '') or elem.get('Text', '')
+                            if ann_text:
+                                annotations.append(ann_text)
+                    if annotations:
+                        parameters['annotations'] = annotations
                 else:
                     logger.warning(f"Could not find model XML in {slx_file}")
-                    logger.info(f"Files in archive: {file_list[:10]}")
+                    logger.info(f"Files in archive: {file_list[:20]}")
                     
         except Exception as e:
             logger.error(f"XML parsing error: {e}")
@@ -311,42 +358,110 @@ class SimulinkParser:
             parameters=parameters
         )
     
-    def _parse_block_element(self, elem: ET.Element) -> Optional[SimulinkBlock]:
-        """Parse a Block element from XML."""
+    def _parse_block_element(self, elem: ET.Element, ns: Dict[str, str] = None) -> Optional[SimulinkBlock]:
+        """Parse a Block element from XML with improved extraction."""
         try:
-            name = elem.get('Name', '')
-            block_type = elem.get('BlockType', 'Unknown')
-            path = elem.get('Path', '')
+            ns = ns or {}
             
-            # Get parameters
+            # Get attributes - try different attribute names used by Simulink
+            name = elem.get('Name', '') or elem.get('name', '')
+            block_type = elem.get('BlockType', '') or elem.get('blockType', '') or elem.get('Type', '')
+            path = elem.get('Path', '') or elem.get('path', '')
+            
+            # If we don't have name from attributes, try element text
+            if not name:
+                name = elem.text or ''
+            
+            # Get parameters from nested elements
             parameters = {}
-            for param in elem.findall(".//{*}Parameter"):
-                param_name = param.get('Name', '')
-                value_elem = param.find("{*}Value")
-                if value_elem is not None and value_elem.text:
-                    parameters[param_name] = value_elem.text
             
-            # Get position
-            position = None
-            pos_elem = elem.find(".//{*}Position")
-            if pos_elem is not None and pos_elem.text:
+            # Try different parameter paths
+            for param_path in ['.//Parameter', './/ns:Parameter', './/p:Parameter', './/Property']:
                 try:
-                    pos_parts = pos_elem.text.strip().split()
-                    position = [int(p) for p in pos_parts]
+                    params = elem.findall(param_path, ns)
+                    for param in params:
+                        param_name = param.get('Name', '') or param.get('name', '')
+                        # Try different value paths
+                        value_elem = param.find("{*}Value") or param.find("Value") or param.find("value")
+                        if value_elem is not None and value_elem.text:
+                            parameters[param_name] = value_elem.text
                 except:
                     pass
             
+            # Also extract direct child elements as parameters
+            for child in elem:
+                child_tag = child.tag if isinstance(child.tag, str) else ''
+                # Clean namespace prefix
+                if '}' in child_tag:
+                    child_tag = child_tag.split('}')[1]
+                
+                # Only use meaningful attributes
+                if child.text and child.text.strip():
+                    if child_tag not in ['Block', 'Line', 'Port', 'Annotation']:
+                        parameters[child_tag] = child.text.strip()
+                
+                # Also get attributes
+                for attr_name, attr_value in child.attrib.items():
+                    if attr_value:
+                        parameters[f"{child_tag}_{attr_name}"] = attr_value
+            
+            # Get position
+            position = None
+            for pos_path in ['.//{*}Position', './/Position']:
+                pos_elem = elem.find(pos_path)
+                if pos_elem is not None:
+                    pos_text = pos_elem.text if pos_elem.text else ''
+                    if pos_text:
+                        try:
+                            pos_parts = pos_text.strip().split()
+                            position = [int(p) for p in pos_parts]
+                            break
+                        except:
+                            pass
+            
             # Get parent
             parent = None
-            parent_elem = elem.find(".//{*}Parent")
-            if parent_elem is not None and parent_elem.text:
-                parent = parent_elem.text
+            for parent_path in ['.//{*}Parent', './/Parent']:
+                parent_elem = elem.find(parent_path)
+                if parent_elem is not None and parent_elem.text:
+                    parent = parent_elem.text
+                    break
             
-            # Get ports
+            # Get ports - try different approaches
             ports = {}
-            inports = elem.findall(".//{*}Port")
+            
+            # From element attributes
+            inports = elem.get('InPorts', '')
+            outports = elem.get('OutPorts', '')
+            
             if inports:
-                ports['inputs'] = [f"in{i+1}" for i in range(len(inports))]
+                try:
+                    num_in = int(inports)
+                    ports['inputs'] = [f"in{i+1}" for i in range(num_in)]
+                except:
+                    pass
+            
+            if outports:
+                try:
+                    num_out = int(outports)
+                    ports['outputs'] = [f"out{i+1}" for i in range(num_out)]
+                except:
+                    pass
+            
+            # From nested elements
+            if not ports:
+                for port_elem in elem.findall('.//{*}Port') + elem.findall('.//Port'):
+                    port_type = port_elem.get('Type', '') or port_elem.get('type', '')
+                    port_index = port_elem.get('Index', '') or port_elem.get('index', '')
+                    
+                    if 'in' in str(port_type).lower() or 'input' in str(port_type).lower():
+                        if 'inputs' not in ports:
+                            ports['inputs'] = []
+                        ports['inputs'].append(f"in{port_index or len(ports['inputs'])+1}")
+                    elif 'out' in str(port_type).lower() or 'output' in str(port_type).lower():
+                        if 'outputs' not in ports:
+                            ports['outputs'] = []
+                        ports['outputs'].append(f"out{port_index or len(ports['outputs'])+1}")
             
             return SimulinkBlock(
                 name=name,
@@ -361,28 +476,84 @@ class SimulinkParser:
             logger.debug(f"Error parsing block element: {e}")
             return None
     
-    def _parse_line_element(self, elem: ET.Element) -> Optional[SimulinkSignal]:
-        """Parse a Line element (signal connection) from XML."""
+    def _parse_line_element(self, elem: ET.Element, ns: Dict[str, str] = None) -> Optional[SimulinkSignal]:
+        """Parse a Line element (signal connection) from XML with improved extraction."""
         try:
-            # Get src and dst ports
-            src = elem.find(".//{*}Src")
-            dst = elem.find(".//{*}Dst")
+            ns = ns or {}
             
-            if src is None or dst is None:
-                return None
+            # Try to find source and destination elements - various Simulink formats
+            source_block = ''
+            source_port = ''
+            target_block = ''
+            target_port = ''
             
-            source_block = src.get('Block', '')
-            source_port = src.get('Port', '')
-            target_block = dst.get('Block', '')
-            target_port = dst.get('Port', '')
+            # Method 1: Look for Src/Dst elements
+            for src_path in ['.//{*}Src', './/Src', './/{*}Source', './/Source']:
+                src = elem.find(src_path)
+                if src is not None:
+                    source_block = src.get('Block', '') or src.get('block', '') or src.text or ''
+                    source_port = src.get('Port', '') or src.get('port', '') or ''
+                    break
             
-            return SimulinkSignal(
-                name=elem.get('Name', None),
-                source_block=source_block,
-                source_port=source_port,
-                target_block=target_block,
-                target_port=target_port
-            )
+            for dst_path in ['.//{*}Dst', './/Dst', './/{*}Destination', './/Destination']:
+                dst = elem.find(dst_path)
+                if dst is not None:
+                    target_block = dst.get('Block', '') or dst.get('block', '') or dst.text or ''
+                    target_port = dst.get('Port', '') or dst.get('port', '') or ''
+                    break
+            
+            # Method 2: If not found, look for Port elements
+            if not source_block:
+                for port in elem.findall('.//{*}Port') + elem.findall('.//Port'):
+                    port_type = port.get('Type', '').lower()
+                    if 'src' in port_type or 'out' in port_type:
+                        source_block = port.get('Block', '') or port.text or ''
+                        source_port = port.get('Index', '') or ''
+                    elif 'dst' in port_type or 'in' in port_type:
+                        target_block = port.get('Block', '') or port.text or ''
+                        target_port = port.get('Index', '') or ''
+            
+            # Method 3: Get from element attributes directly
+            if not source_block:
+                source_block = elem.get('SrcBlock', '') or elem.get('srcBlock', '') or ''
+                source_port = elem.get('SrcPort', '') or elem.get('srcPort', '') or ''
+            
+            if not target_block:
+                target_block = elem.get('DstBlock', '') or elem.get('dstBlock', '') or ''
+                target_port = elem.get('DstPort', '') or elem.get('dstPort', '') or ''
+            
+            # Get signal name
+            signal_name = elem.get('Name', '') or elem.get('name', '')
+            
+            # Get signal properties (width, data type)
+            signal_width = None
+            data_type = None
+            
+            # Try to find signal properties
+            for prop_path in ['.//{*}Prop', './/Prop', './/{*}Properties']:
+                props = elem.findall(prop_path)
+                for prop in props:
+                    prop_name = prop.get('Name', '')
+                    if 'width' in prop_name.lower():
+                        try:
+                            signal_width = int(prop.text or prop.get('Value', ''))
+                        except:
+                            pass
+                    elif 'datatype' in prop_name.lower() or 'type' in prop_name.lower():
+                        data_type = prop.text or prop.get('Value', '')
+            
+            # Only return if we have meaningful data
+            if source_block or target_block:
+                return SimulinkSignal(
+                    name=signal_name or None,
+                    source_block=source_block,
+                    source_port=source_port,
+                    target_block=target_block,
+                    target_port=target_port,
+                    signal_width=signal_width,
+                    data_type=data_type
+                )
+            return None
         except Exception as e:
             logger.debug(f"Error parsing line element: {e}")
             return None

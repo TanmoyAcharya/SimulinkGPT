@@ -20,10 +20,18 @@ class PromptTemplate:
         **kwargs
     ) -> str:
         """Format the prompt with given variables."""
+        # Handle potentially missing or empty model_summary
+        if not model_summary or model_summary.strip() == "":
+            model_summary = "[No model data available - the Simulink model may not have been parsed correctly]"
+        
+        # Handle context
+        if not context or context.strip() == "":
+            context = "No additional context available from knowledge base."
+        
         user_content = self.user_template.format(
             model_summary=model_summary,
             query=query,
-            context=context or "No additional context available."
+            context=context
         )
         
         return f"<|system|>\n{self.system_prompt}\n<|user|>\n{user_content}\n<|assistant|>\n"
@@ -37,9 +45,12 @@ You have access to:
 1. A parsed representation of the Simulink model structure
 2. Relevant knowledge from Simulink documentation and best practices
 
-When responding:
-- Be specific about block names and paths from the model
-- Provide actionable suggestions with clear explanations
+IMPORTANT INSTRUCTIONS:
+- Only analyze and discuss blocks, signals, and components that are ACTUALLY present in the model structure provided
+- Do NOT make up or hallucinate block names, signals, or issues that don't exist in the parsed data
+- If the model structure is incomplete or lacks detail, state what information is missing
+- Be specific about block names and paths from the actual parsed model
+- Provide actionable suggestions with clear explanations based ONLY on the provided data
 - If you identify issues, explain why they are problems and how to fix them
 - Use proper technical terminology
 - Format your responses clearly with headers and bullet points
@@ -48,7 +59,7 @@ When responding:
 
 DEBUGGING_TEMPLATE = """## Task: Debug Simulink Model
 
-### Model Structure:
+### Model Structure (PARSED DATA - USE ONLY THIS):
 {model_summary}
 
 ### Knowledge Base Context:
@@ -57,17 +68,20 @@ DEBUGGING_TEMPLATE = """## Task: Debug Simulink Model
 ### User Query:
 {query}
 
+IMPORTANT: Analyze ONLY the blocks, signals, and components that appear in the model structure above.
+Do NOT mention or analyze any blocks or signals that are not explicitly shown in the parsed data.
+
 Please analyze the model structure above and provide:
-1. Any potential issues or errors you can identify
-2. Specific blocks that might be causing problems
+1. Any potential issues or errors you can identify from the actual model data
+2. Specific blocks that might be causing problems (only those in the model)
 3. Suggested fixes for any issues found
 
-Format your response with clear sections for each issue found."""
+If the model appears empty or lacks detail, please state that the parsing may have been incomplete."""
 
 
 IMPROVEMENTS_TEMPLATE = """## Task: Suggest Improvements
 
-### Model Structure:
+### Model Structure (PARSED DATA - USE ONLY THIS):
 {model_summary}
 
 ### Knowledge Base Context:
@@ -76,18 +90,21 @@ IMPROVEMENTS_TEMPLATE = """## Task: Suggest Improvements
 ### User Query:
 {query}
 
+IMPORTANT: Analyze ONLY the blocks, signals, and components that appear in the model structure above.
+Do NOT suggest improvements for blocks or systems that don't exist in the parsed data.
+
 Please provide:
-1. Suggestions for improving model performance
+1. Suggestions for improving model performance (based on actual blocks present)
 2. Recommendations for better modeling practices
 3. Potential optimizations for simulation speed
 4. Improvements for code generation (if applicable)
 
-Be specific about which blocks or subsystems could be improved."""
+Be specific about which actual blocks or subsystems could be improved."""
 
 
 GUIDELINES_TEMPLATE = """## Task: Provide Guidelines
 
-### Model Structure:
+### Model Structure (PARSED DATA - USE ONLY THIS):
 {model_summary}
 
 ### Knowledge Base Context:
@@ -96,18 +113,21 @@ GUIDELINES_TEMPLATE = """## Task: Provide Guidelines
 ### User Query:
 {query}
 
+IMPORTANT: Provide guidelines relevant to the ACTUAL blocks and components present in the model.
+Do NOT reference Simulink features or blocks that are not in the parsed model.
+
 Please provide:
-1. Relevant guidelines and best practices
+1. Relevant guidelines and best practices for the blocks present
 2. Configuration recommendations
 3. Design pattern suggestions
 4. Any applicable standards or conventions
 
-Reference specific Simulink features and blocks where relevant."""
+Reference specific Simulink features and blocks that exist in the model."""
 
 
 GENERAL_TEMPLATE = """## Task: Simulink Analysis
 
-### Model Structure:
+### Model Structure (PARSED DATA - USE ONLY THIS):
 {model_summary}
 
 ### Knowledge Base Context:
@@ -116,7 +136,10 @@ GENERAL_TEMPLATE = """## Task: Simulink Analysis
 ### User Query:
 {query}
 
-Please provide a helpful, detailed response addressing the user's query. Use the model structure and knowledge base to provide specific, actionable advice."""
+IMPORTANT: Your response must be based ONLY on the model structure provided above.
+Do NOT make up information about blocks, signals, or components that are not in the parsed data.
+
+Please provide a helpful, detailed response addressing the user's query. Use ONLY the model structure and knowledge base to provide specific, actionable advice. If the model data is incomplete, state what is missing."""
 
 
 # Pre-defined templates for different tasks

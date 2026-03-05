@@ -126,43 +126,68 @@ class SimulinkModel:
         }
     
     def to_text_summary(self) -> str:
-        """Generate a text summary of the model for LLM context."""
+        """Generate a detailed text summary of the model for LLM context."""
         lines = [
             f"Simulink Model: {self.name}",
             f"File: {self.file_path}",
             f"Total Blocks: {len(self.blocks)}",
             f"Total Signals: {len(self.signals)}",
             f"Subsystems: {len(self.subsystems)}",
-            "",
-            "=== Blocks ==="
+            ""
         ]
         
         # Group blocks by type
         blocks_by_type: Dict[str, List[SimulinkBlock]] = {}
         for block in self.blocks:
-            category = block.get_type_category().value
+            # Use actual block type for more accurate grouping
+            category = block.block_type if block.block_type else 'unknown'
             if category not in blocks_by_type:
                 blocks_by_type[category] = []
             blocks_by_type[category].append(block)
         
+        lines.append("=== BLOCKS BY TYPE ===")
         for category, blocks in sorted(blocks_by_type.items()):
-            lines.append(f"\n{category.upper()} ({len(blocks)}):")
-            for block in blocks:
-                lines.append(f"  - {block.name} ({block.block_type})")
+            lines.append(f"\n{category.upper()} ({len(blocks)} blocks):")
+            for block in blocks[:20]:  # Limit to first 20 per type
+                lines.append(f"  - {block.name}")
+                # Include key parameters
                 if block.parameters:
-                    key_params = list(block.parameters.keys())[:3]
-                    params_str = ", ".join(f"{k}={block.parameters[k]}" for k in key_params)
-                    lines.append(f"    Params: {params_str}")
+                    key_params = list(block.parameters.keys())[:5]
+                    params_str = ", ".join(f"{k}={block.parameters[k][:50]}" for k in key_params if block.parameters.get(k))
+                    if params_str:
+                        lines.append(f"    Params: {params_str}")
+                # Include parent subsystem
+                if block.parent:
+                    lines.append(f"    Parent: {block.parent}")
+            if len(blocks) > 20:
+                lines.append(f"  ... and {len(blocks) - 20} more")
         
         if self.subsystems:
-            lines.append("\n=== Subsystems ===")
-            for subsystem in self.subsystems:
+            lines.append("\n=== SUBSYSTEMS ===")
+            for subsystem in self.subsystems[:30]:
                 lines.append(f"  - {subsystem}")
+            if len(self.subsystems) > 30:
+                lines.append(f"  ... and {len(self.subsystems) - 30} more")
+        
+        if self.signals:
+            lines.append("\n=== SIGNAL CONNECTIONS (sample) ===")
+            for signal in self.signals[:30]:
+                src = signal.source_block or signal.source_port
+                dst = signal.target_block or signal.target_port
+                lines.append(f"  - {src} -> {dst}")
+            if len(self.signals) > 30:
+                lines.append(f"  ... and {len(self.signals) - 30} more signals")
         
         if self.configuration:
-            lines.append("\n=== Configuration ===")
+            lines.append("\n=== MODEL CONFIGURATION ===")
             for key, value in self.configuration.items():
                 lines.append(f"  {key}: {value}")
+        
+        if self.parameters:
+            lines.append("\n=== MODEL PARAMETERS ===")
+            for key, value in self.parameters.items():
+                if key != 'annotations':  # Skip annotations in main list
+                    lines.append(f"  {key}: {value}")
         
         return "\n".join(lines)
     
