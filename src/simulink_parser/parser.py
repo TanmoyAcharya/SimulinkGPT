@@ -205,42 +205,94 @@ class SimulinkParser:
         
         try:
             with zipfile.ZipFile(slx_file, 'r') as zf:
-                # The main model XML is in simulink/simulink.r201ola (changes with version)
-                # We need to find the correct archive
-                model_xml = None
+                # List all files in the archive
+                file_list = zf.namelist()
+                logger.info(f"SLX archive contains {len(file_list)} files")
                 
-                for name in zf.namelist():
-                    if 'simulink.xml' in name:
-                        model_xml = zf.read(name)
+                # Find the main model XML - different Simulink versions use different paths
+                model_xml = None
+                xml_paths = [
+                    'simulink/simulink.xml',
+                    'simulink.xml',
+                ]
+                
+                for xml_path in xml_paths:
+                    if xml_path in file_list:
+                        model_xml = zf.read(xml_path)
+                        logger.info(f"Found model XML at: {xml_path}")
                         break
+                
+                # If not found, search for any XML file
+                if not model_xml:
+                    for name in file_list:
+                        if name.endswith('.xml') and 'simulink' in name.lower():
+                            model_xml = zf.read(name)
+                            logger.info(f"Found model XML at: {name}")
+                            break
                 
                 if model_xml:
                     root = ET.fromstring(model_xml)
                     
-                    # Extract blocks
-                    for block_elem in root.findall(".//{*}Block"):
-                        block = self._parse_block_element(block_elem)
-                        if block:
-                            blocks.append(block)
-                            if block.block_type == "SubSystem":
-                                subsystems.append(block.path)
+                    # Try different XML namespaces used by Simulink
+                    namespaces = {
+                        'ns': 'http://www.mathworks.com/Schema/matlab/2016b/xml/matlab',  # Older
+                        '': '',  # No namespace
+                    }
+                    
+                    # Extract blocks - try different paths
+                    for ns_prefix in ['', 'ns', None]:
+                        try:
+                            if ns_prefix:
+                                blocks_elem = root.findall(f".//{{{ns_prefix}}}Block")
+                            else:
+                                blocks_elem = root.findall(".//Block")
+                            
+                            if blocks_elem:
+                                logger.info(f"Found {len(blocks_elem)} blocks")
+                                for block_elem in blocks_elem:
+                                    block = self._parse_block_element(block_elem)
+                                    if block:
+                                        blocks.append(block)
+                                        if block.block_type == "SubSystem":
+                                            subsystems.append(block.path)
+                                break
+                        except Exception as e:
+                            logger.debug(f"Block extraction with ns '{ns_prefix}' failed: {e}")
                     
                     # Extract lines (signals)
-                    for line_elem in root.findall(".//{*}Line"):
-                        signal = self._parse_line_element(line_elem)
-                        if signal:
-                            signals.append(signal)
-                    
-                    # Extract model parameters
-                    for param_elem in root.findall(".//{*}Parameter"):
-                        name_elem = param_elem.find("{*}Name")
-                        value_elem = param_elem.find("{*}Value")
-                        if name_elem is not None and value_elem is not None:
-                            parameters[name_elem.text] = value_elem.text
+                    for ns_prefix in ['', 'ns', None]:
+                        try:
+                            if ns_prefix:
+                                lines_elem = root.findall(f".//{{{ns_prefix}}}Line")
+                            else:
+                                lines_elem = root.findall(".//Line")
                             
+                            if lines_elem:
+                                logger.info(f"Found {len(lines_elem)} lines")
+                                for line_elem in lines_elem:
+                                    signal = self._parse_line_element(line_elem)
+                                    if signal:
+                                        signals.append(signal)
+                                break
+                        except Exception as e:
+                            logger.debug(f"Line extraction with ns '{ns_prefix}' failed: {e}")
+                    
+                    # Also try to find elements without namespace
+                    if not blocks:
+                        for elem in root.iter():
+                            if elem.tag.endswith('Block') or 'Block' in elem.tag:
+                                block = self._parse_block_element(elem)
+                                if block:
+                                    blocks.append(block)
+                    
+                else:
+                    logger.warning(f"Could not find model XML in {slx_file}")
+                    logger.info(f"Files in archive: {file_list[:10]}")
+                    
         except Exception as e:
             logger.error(f"XML parsing error: {e}")
-            # Return empty model with error info
+            import traceback
+            traceback.print_exc()
             return SimulinkModel(
                 name=model_name,
                 file_path=slx_file,
@@ -249,6 +301,7 @@ class SimulinkParser:
                 parameters={"error": str(e)}
             )
         
+        logger.info(f"Parsed: {len(blocks)} blocks, {len(signals)} signals")
         return SimulinkModel(
             name=model_name,
             file_path=slx_file,
